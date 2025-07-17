@@ -135,24 +135,24 @@ def image_to_feature(image, model):
         embedding = model(img_tensor)
     return embedding.squeeze().numpy()
 
-def search_similar_features(query_feature, k=5, threshold=2.0):
+def search_similar_features(query_feature, k=5, threshold=0.3):
     if index is None or label_map is None:
         return []
     
     # Search the index
-    distances, indices = index.search(np.array([query_feature]), k)
+    similarities, indices = index.search(np.array([query_feature]), k)
     
     results = []
     for i in range(len(indices[0])):
-        distance = distances[0][i]
-        if distance < threshold:
+        similarity = similarities[0][i]
+        if similarity > threshold:
             employee_name = label_map[indices[0][i]]
-            results.append((employee_name, distance, indices[0][i]))
+            results.append((employee_name, similarity, indices[0][i]))
     return results
 
 
 def visualize_embeddings(query_embedding=None, matches=None):
-    """Visualize embeddings in 3D space using t-SNE with highlighted points and distance lines."""
+    """Visualize embeddings in 3D space using t-SNE with highlighted points and similarity lines."""
     if all_embeddings is None or len(all_embeddings) < 3:
         st.warning("Not enough embeddings to visualize (need at least 3)")
         return
@@ -166,9 +166,9 @@ def visualize_embeddings(query_embedding=None, matches=None):
     hover_names = []
     for i, name in enumerate(labels):
         if query_embedding is not None and i < len(all_embeddings):
-            # Calculate distance from this point to query
+            # Calculate similarity from this point to query
             dist = np.linalg.norm(all_embeddings[i] - query_embedding)
-            hover_names.append(f"Employee: {name} (dist: {dist:.4f})")
+            hover_names.append(f"Employee: {name} (Dist: {dist:.4f})")
         else:
             hover_names.append(f"Employee: {name}")
     
@@ -185,11 +185,11 @@ def visualize_embeddings(query_embedding=None, matches=None):
     # Highlight matches if available
     match_indices = []
     if matches:
-        for i, (name, distance, idx) in enumerate(matches):
+        for i, (name, similarity, idx) in enumerate(matches):
             if idx < len(colors):  # Ensure we don't go out of bounds
                 colors[idx] = 'green' if i == 0 else 'orange'  # Top match is green, others orange
                 sizes[idx] = 12
-                hover_names[idx] = f"Match {i+1}: {name} (dist: {distance:.4f})"
+                hover_names[idx] = f"Match {i+1}: {name} (Similarity: {similarity:.4f})"
                 match_indices.append(idx)
     
     # Calculate appropriate perplexity (must be less than n_samples)
@@ -233,9 +233,9 @@ def visualize_embeddings(query_embedding=None, matches=None):
         }
     )
     
-    # Add distance lines between query and matches
+    # Add similarity lines between query and matches
     if query_embedding is not None and matches:
-        for i, (name, distance, idx) in enumerate(matches[:5]):  # Only show top 3 matches
+        for i, (name, similarity, idx) in enumerate(matches[:5]):  # Only show top 3 matches
             if idx < len(embeddings_3d):
                 # Add a line between query and match
                 fig.add_trace(
@@ -250,7 +250,7 @@ def visualize_embeddings(query_embedding=None, matches=None):
                         ),
                         showlegend=False,
                         hoverinfo='text',
-                        hovertext=f"Distance: {distance:.4f}"
+                        hovertext=f"Similarity: {similarity:.4f}"
                     )
                 )
     
@@ -267,7 +267,7 @@ def visualize_embeddings(query_embedding=None, matches=None):
     
     # Add annotations for matches
     if matches:
-        for i, (name, distance, idx) in enumerate(matches[:5]):  # Only annotate top 3
+        for i, (name, similarity, idx) in enumerate(matches[:5]):  # Only annotate top 3
             if idx < len(embeddings_3d):
                 fig.add_annotation(
                     x=embeddings_3d[idx, 0],
@@ -279,19 +279,19 @@ def visualize_embeddings(query_embedding=None, matches=None):
                 )
     
     st.plotly_chart(fig, use_container_width=True)
-    # Add a distance table below the plot
+    # Add a similarity table below the plot
     if matches:
         st.subheader("Match Distances")
         match_data = []
-        for i, (name, distance, idx) in enumerate(matches):
+        for i, (name, similarity, idx) in enumerate(matches):
             match_data.append({
                 "Rank": i+1,
                 "Name": name,
-                "Distance": f"{distance:.4f}",
+                "Similarity": f"{similarity:.4f}",
             })
         
         df_matches = pd.DataFrame(match_data)
-        st.dataframe(df_matches.style.highlight_min(subset=["Distance"], color='lightgreen'), 
+        st.dataframe(df_matches.style.highlight_max(subset=["Similarity"], color='lightgreen'), 
                     use_container_width=True)
     
 
@@ -373,74 +373,73 @@ with col2:
     
     if st.session_state.get('capture_clicked', False):
         st.info("Preparing camera...")
+        st.session_state.captured_image = None
         camera_placeholder = st.empty()
         countdown_placeholder = st.empty()
-        
+
         cap = cv2.VideoCapture(0)
+        captured_frame = None
+
         if not cap.isOpened():
-            st.error("Could not access camera. Please ensure it's connected.")
+            st.warning("📷 Could not access camera. Please upload an image instead.")
+            uploaded_file = st.file_uploader("Upload an image", type=["jpg", "jpeg", "png"])
+            if uploaded_file is not None:
+                captured_image = Image.open(uploaded_file).convert("RGB")
+                captured_image = crop_center_square(captured_image)
+                st.session_state.captured_image = captured_image
         else:
             start_time = time.time()
-            capture_delay = 3  # 3 second countdown
-            captured_frame = None
-            
+            capture_delay = 3  # 3-second countdown
+
             while (time.time() - start_time) < capture_delay:
                 ret, frame = cap.read()
                 if not ret:
                     st.error("Failed to capture frame")
                     break
-                
-                # Show countdown
+
                 remaining = int(capture_delay - (time.time() - start_time)) + 1
                 countdown_placeholder.markdown(
-                    f"<h2 style='text-align:center;color:#ff5722;'>{remaining}</h2>", 
+                    f"<h2 style='text-align:center;color:#ff5722;'>{remaining}</h2>",
                     unsafe_allow_html=True
                 )
-                
-                # Display camera feed
+
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 camera_placeholder.image(frame_rgb, channels="RGB", use_container_width=True)
-                
-                # Capture frame at the end
+
                 if (time.time() - start_time) >= (capture_delay - 0.1):
                     captured_frame = frame_rgb
-                
+
                 time.sleep(0.05)
-            
+
             cap.release()
             camera_placeholder.empty()
             countdown_placeholder.empty()
-            
+
             if captured_frame is not None:
-                # Process captured image
                 captured_image = Image.fromarray(captured_frame)
-                # Crop center and resize to 300x300
                 captured_image = crop_center_square(captured_image)
                 st.session_state.captured_image = captured_image
-                
-                # Auto-process the image
-                with st.spinner("Finding match..."):
-                    # Convert to embedding
-                    query_embedding = image_to_feature(captured_image, face_recognition_model)
-                    st.session_state.query_embedding = query_embedding
-                    
-                    # Find matches (top 5)
-                    matches = search_similar_features(query_embedding, k=5, threshold=2.0)
-                    st.session_state.all_matches = matches
-                    
-                    if matches:
-                        # Update status for the best match
-                        best_match_name, best_distance, _ = matches[0]
-                        print(f'List Matched Name {best_match_name}')
-                        st.session_state.checkin_status[best_match_name] = True
-                        print(st.session_state.checkin_status)
-                        st.session_state.matching_result = best_match_name
-                        st.session_state.matching_distance = best_distance
-                        st.session_state.matching_avatar = get_avatar_image(best_match_name)
-                        st.session_state.capture_clicked = False
-                        st.rerun()
-                    else:
-                        st.session_state.matching_result = None
+
+        # If we have a captured image (from camera or upload)
+        if st.session_state.get('captured_image'):
+            with st.spinner("🔍 Finding match..."):
+                query_embedding = image_to_feature(st.session_state.captured_image, face_recognition_model)
+                st.session_state.query_embedding = query_embedding
+
+                matches = search_similar_features(query_embedding, k=5, threshold=0.3)
+                st.session_state.all_matches = matches
+
+                if matches:
+                    best_match_name, best_distance, _ = matches[0]
+                    st.session_state.checkin_status[best_match_name] = True
+                    st.session_state.matching_result = best_match_name
+                    st.session_state.matching_distance = best_distance
+                    st.session_state.matching_avatar = get_avatar_image(best_match_name)
+                    st.session_state.capture_clicked = False
+                    st.rerun()
+                else:
+                    st.session_state.matching_result = None
+
                 
     
     # Show captured image if available
@@ -453,7 +452,7 @@ with col2:
         if st.session_state.matching_result:
             st.success(f"""
             ✅ **{st.session_state.matching_result}** checked in!
-            Distance: {st.session_state.matching_distance:.4f}
+            Similarity: {st.session_state.matching_distance:.4f}
             """)
             
             def image_to_base64(image_path, size=(300, 300)):
@@ -466,7 +465,7 @@ with col2:
             st.markdown("### 🏆 Top Matches")
             inner_cols = st.columns(2)  # Create two columns inside col2
 
-            for i, (name, distance, _) in enumerate(st.session_state.all_matches[:5]):
+            for i, (name, similarity, _) in enumerate(st.session_state.all_matches[:5]):
                 avatar = get_avatar_image(name)
                 border_color = "#4CAF50" if i == 0 else "#FFC107"
 
@@ -476,7 +475,7 @@ with col2:
                             <img src="data:image/png;base64,{image_to_base64(avatar)}" style="width:100%; border-radius:6px;" />
                             <div style="margin-top:5px;">
                                 <strong>{name}</strong><br>
-                                <small>Dist: {distance:.4f}</small>
+                                <small>Similarity: {similarity:.4f}</small>
                             </div>
                         </div>
                     """, unsafe_allow_html=True)
