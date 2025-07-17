@@ -1,3 +1,5 @@
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 import streamlit as st
 import cv2
 from PIL import Image, ImageOps
@@ -6,7 +8,6 @@ import faiss
 import torch
 import torchvision.transforms as T
 from facenet_pytorch import InceptionResnetV1
-import os
 import time
 import matplotlib.pyplot as plt
 from sklearn.manifold import TSNE
@@ -16,7 +17,6 @@ import plotly.graph_objects as go
 import base64
 from io import BytesIO
 
-os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
 # Page Configuration
 st.set_page_config(page_title="Employee Dashboard", page_icon="🧑‍💼", layout="wide")
